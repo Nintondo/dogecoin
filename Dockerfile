@@ -1,48 +1,23 @@
-# Set up base image for builder
-FROM ubuntu:22.04 AS builder
+# Build stage
+FROM debian:bookworm AS builder
 
-# Set environment variables
 ARG VERSION_DOGE
+ARG BUILD_JOBS=0
+ARG RUN_TESTS=0
+ARG PREFIX=/opt/dogecoin
 ENV DEBIAN_FRONTEND=noninteractive
-ENV MAKEJOBS="-j8"
-ENV CHECK_DOC="0"
-ENV CCACHE_SIZE="100M"
-ENV CCACHE_TEMPDIR="/tmp/.ccache-temp"
-ENV CCACHE_COMPRESS="1"
-ENV PYTHON_DEBUG="1"
-ENV CACHE_NONCE="1"
-ENV SDK_URL="https://depends.dogecoincore.org"
 
-# Install dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    build-essential \
-    libtool \
-    autotools-dev \
-    automake \
-    pkg-config \
-    bsdmainutils \
-    curl \
-    ca-certificates \
-    ccache \
-    rsync \
-    git \
-    procps \
-    bison \
-    python3 \
-    python3-pip \
-    python3-setuptools \
-    python3-wheel \
-    bc \
-    tar \
-    python3-zmq && \
-    python3 -m pip install setuptools==70.3.0 --upgrade && \
-    python3 -m pip install lief && \
+WORKDIR /usr/src/dogecoin
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libtool autotools-dev automake pkg-config \
+    bsdmainutils curl ca-certificates ccache rsync git procps \
+    bison python3 python3-pip python3-setuptools python3-wheel \
+    bc tar python3-zmq && \
+    python3 -m pip install --no-cache-dir setuptools==70.3.0 --upgrade && \
+    python3 -m pip install --no-cache-dir lief && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
-
-# Set working directory
-WORKDIR /dogecoin
 
 # Download, extract, and clean up Dogecoin source
 RUN curl -o dogecoin.tar.gz -Lk "https://github.com/dogecoin/dogecoin/archive/refs/tags/v${VERSION_DOGE}.tar.gz" && \
@@ -51,32 +26,44 @@ RUN curl -o dogecoin.tar.gz -Lk "https://github.com/dogecoin/dogecoin/archive/re
     rm -rf dogecoin-${VERSION_DOGE} && \
     rm -f dogecoin.tar.gz
 
-# Build dependencies
-RUN ln -snf /usr/share/zoneinfo/Etc/UTC /etc/localtime && echo Etc/UTC > /etc/timezone && \
-    ccache --max-size=$CCACHE_SIZE && \
-    make $MAKEJOBS -C depends HOST=x86_64-unknown-linux-gnu
+# Build dependencies and Dogecoin
+RUN if [ "${BUILD_JOBS}" = "0" ] || [ -z "${BUILD_JOBS}" ]; then BUILD_JOBS="$(nproc)"; fi && \
+    ln -snf /usr/share/zoneinfo/Etc/UTC /etc/localtime && echo Etc/UTC > /etc/timezone && \
+    ccache --max-size=100M && \
+    make -j"${BUILD_JOBS}" -C depends HOST=x86_64-unknown-linux-gnu && \
+    ./autogen.sh && \
+    CONFIG_SITE="$PWD/depends/x86_64-unknown-linux-gnu/share/config.site" \
+    ./configure --prefix="${PREFIX}" --enable-glibc-back-compat --enable-zmq \
+      --enable-reduce-exports --enable-c++14 LDFLAGS=-static-libstdc++ && \
+    make -j"${BUILD_JOBS}" && \
+    if [ "${RUN_TESTS}" = "1" ]; then make -j"${BUILD_JOBS}" check VERBOSE=1; fi && \
+    mkdir -p /build && \
+    make DESTDIR=/build install
 
-# Build Dogecoin
-RUN ./autogen.sh && \
-    ./configure --prefix=$(pwd)/depends/x86_64-unknown-linux-gnu --enable-glibc-back-compat --enable-zmq --enable-reduce-exports --enable-c++14 LDFLAGS=-static-libstdc++ && \
-    make $MAKEJOBS install && \
-    make check $MAKEJOBS VERBOSE=1
-
-# Set up base image for runner
+# Runtime stage
 FROM debian:bookworm-slim AS runner
 
-# Install dependencies
-RUN apt-get update && apt-get install -y libc6 libgcc-s1 curl && \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    gosu \
+    libc6 \
+    libgcc-s1 \
+    tini && \
     rm -rf /var/lib/apt/lists/*
 
-# Set working directory
-WORKDIR /dogecoin
+RUN groupadd --system --gid 1001 appuser && \
+    useradd --system --uid 1001 --gid appuser --home /home/appuser --shell /usr/sbin/nologin appuser && \
+    mkdir -p /home/appuser/.cache /data && \
+    chown -R 1001:1001 /home/appuser /data
 
-# Copy built binaries from the builder stage
-COPY --from=builder /dogecoin/depends/x86_64-unknown-linux-gnu/bin ./
+WORKDIR /app
 
-# Default port
+COPY --from=builder /build/opt/dogecoin/bin/ /app/
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 EXPOSE 19918
 
-# Entrypoint
-ENTRYPOINT ["./dogecoind"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]
+CMD ["/app/dogecoind"]
