@@ -13,9 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential libtool autotools-dev automake pkg-config \
     bsdmainutils curl ca-certificates ccache rsync git procps \
     bison python3 python3-pip python3-setuptools python3-wheel \
-    bc tar python3-zmq && \
-    python3 -m pip install --no-cache-dir setuptools==70.3.0 --upgrade && \
-    python3 -m pip install --no-cache-dir lief && \
+    bc tar python3-zmq python3-lief && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
