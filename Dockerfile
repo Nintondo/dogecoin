@@ -1,5 +1,5 @@
 # Build stage
-FROM debian:trixie AS builder
+FROM debian:bookworm AS builder
 
 ARG VERSION_DOGE
 ARG BUILD_JOBS=0
@@ -42,7 +42,7 @@ RUN if [ "${BUILD_JOBS}" = "0" ] || [ -z "${BUILD_JOBS}" ]; then BUILD_JOBS="$(n
     make DESTDIR=/build install
 
 # Runtime stage
-FROM debian:trixie AS runner
+FROM debian:bookworm-slim AS runner
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
