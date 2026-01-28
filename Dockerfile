@@ -1,5 +1,5 @@
 # Build stage
-FROM debian:bookworm AS builder
+FROM debian:trixie AS builder
 
 ARG VERSION_DOGE
 ARG BUILD_JOBS=0
@@ -13,7 +13,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential libtool autotools-dev automake pkg-config \
     bsdmainutils curl ca-certificates ccache rsync git procps \
     bison python3 python3-pip python3-setuptools python3-wheel \
-    bc tar python3-zmq python3-lief && \
+    bc tar python3-zmq python3-venv && \
+    python3 -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir setuptools==70.3.0 --upgrade && \
+    /opt/venv/bin/pip install --no-cache-dir lief && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -39,7 +42,7 @@ RUN if [ "${BUILD_JOBS}" = "0" ] || [ -z "${BUILD_JOBS}" ]; then BUILD_JOBS="$(n
     make DESTDIR=/build install
 
 # Runtime stage
-FROM debian:bookworm-slim AS runner
+FROM debian:trixie AS runner
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
