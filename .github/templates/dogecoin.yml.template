@@ -1,0 +1,23 @@
+version: "3.9"
+
+services:
+  ${CONTAINER_NAME}:
+    image: ${IMAGE}
+    container_name: ${CONTAINER_NAME}
+    restart: always
+    volumes:
+      - ./data/dogecoin.conf:/app/data/dogecoin.conf:ro
+      - ./data/node:/app/data/node:rw
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+    ports:
+      - "44556:44556"
+      ${DOGECOIN_P2P_PORT_MAPPING_LINE}
+    expose:
+      - "19918"
+    command: ["/app/dogecoind", "-datadir=/app/data/node", "-conf=/app/data/dogecoin.conf", "-printtoconsole"${DOGECOIN_NETWORK_ARG}]
+    stop_grace_period: 10m

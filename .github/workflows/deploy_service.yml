@@ -1,0 +1,152 @@
+name: Deploy service
+run-name: >-
+  Deploy → ${{ format('{0}-{1}', inputs.coin, inputs.network) }} (manual)
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      coin:
+        description: Coin
+        required: true
+        type: choice
+        options:
+          - doge
+      network:
+        description: Network
+        required: true
+        type: choice
+        options:
+          - testnet
+          - mainnet
+      sha:
+        description: Commit SHA for deploy/rollback (default latest in branch)
+        required: false
+        default: ''
+      confirm_mainnet:
+        description: Type DEPLOY_MAINNET to confirm mainnet rollout (required only for mainnet)
+        required: false
+        default: ''
+
+concurrency:
+  group: deploy-${{ inputs.coin }}-${{ inputs.network }}
+  cancel-in-progress: false
+
+jobs:
+  deployment:
+    runs-on: self-hosted
+    environment: ${{ inputs.coin }}-${{ inputs.network }}
+
+    steps:
+      - name: Validate explicit mainnet confirmation
+        if: github.event_name == 'workflow_dispatch' && inputs.network == 'mainnet'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.confirm_mainnet }}" != "DEPLOY_MAINNET" ]; then
+            echo "Mainnet deploy requires explicit confirmation."
+            echo "Re-run workflow_dispatch and set confirm_mainnet=DEPLOY_MAINNET"
+            exit 1
+          fi
+
+      - name: Checkout repository for local actions
+        uses: actions/checkout@v5
+
+      - name: Resolve SERVICE_TAG
+        uses: ./.github/actions/resolve-service-tag
+
+      - name: Log SERVICE_TAG
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Deploying image with SHA ${{ env.SERVICE_TAG }}"
+
+      - name: Log in to Docker Registry
+        shell: bash
+        env:
+          CI_REGISTRY: ${{ secrets.CI_REGISTRY }}
+          CI_REGISTRY_USER: ${{ secrets.CI_REGISTRY_USER }}
+          CI_REGISTRY_PASSWORD: ${{ secrets.CI_REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$CI_REGISTRY_PASSWORD" \
+            | docker login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin
+
+      - name: Check if image exists
+        uses: ./.github/actions/check-image-exists
+        with:
+          registry: ${{ secrets.CI_REGISTRY }}
+          registry_repo: ${{ secrets.CI_REGISTRY_REPO }}
+          service_name: ${{ vars.SERVICE_NAME }}
+          service_tag: ${{ env.SERVICE_TAG }}
+
+      - name: Render service files from templates
+        shell: bash
+        env:
+          CI_REGISTRY: ${{ secrets.CI_REGISTRY }}
+          CI_REGISTRY_REPO: ${{ secrets.CI_REGISTRY_REPO }}
+          SERVICE_NAME: ${{ vars.SERVICE_NAME }}
+          CONTAINER_NAME: ${{ vars.CONTAINER_NAME }}
+          DOGECOIN_LISTEN: ${{ vars.DOGECOIN_LISTEN }}
+          DOGECOIN_SERVER: ${{ vars.DOGECOIN_SERVER }}
+          DOGECOIN_MAXCONNECTIONS: ${{ vars.DOGECOIN_MAXCONNECTIONS }}
+          DOGECOIN_RPCPORT: ${{ vars.DOGECOIN_RPCPORT }}
+          DOGECOIN_RPCUSER: ${{ secrets.DOGECOIN_RPCUSER }}
+          DOGECOIN_RPCPASSWORD: ${{ secrets.DOGECOIN_RPCPASSWORD }}
+          DOGECOIN_RPCBIND: ${{ vars.DOGECOIN_RPCBIND }}
+          DOGECOIN_RPCTHREADS: ${{ vars.DOGECOIN_RPCTHREADS }}
+          DOGECOIN_RPCALLOWIP: ${{ vars.DOGECOIN_RPCALLOWIP }}
+          DOGECOIN_MIN_RELAY_FEE_LINE: ${{ vars.DOGECOIN_MIN_RELAY_FEE_LINE }}
+          DOGECOIN_P2P_PORT_MAPPING_LINE: ${{ vars.DOGECOIN_P2P_PORT_MAPPING_LINE }}
+          DOGECOIN_NETWORK_ARG: ${{ vars.DOGECOIN_NETWORK_ARG }}
+        run: |
+          set -euo pipefail
+          if ! command -v envsubst >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y gettext-base
+          fi
+          IMAGE="${CI_REGISTRY}/${CI_REGISTRY_REPO}/${SERVICE_NAME}:${SERVICE_TAG}"
+          export IMAGE
+          envsubst < .github/templates/dogecoin.yml.template > dogecoin.yml.updated
+          envsubst < .github/templates/dogecoin.conf.template > dogecoin.conf.updated
+
+      - name: Copy rendered files to server
+        uses: appleboy/scp-action@v1.0.0
+        with:
+          host: ${{ secrets.HOST_1 }}
+          username: ${{ secrets.HOST_1_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "dogecoin.yml.updated,dogecoin.conf.updated"
+          target: "/opt/${{ vars.COIN }}-${{ vars.NETWORK }}/services/${{ vars.SERVICE_NAME }}"
+
+      - name: Deploy service
+        uses: ./.github/actions/deploy-over-ssh
+        with:
+          host: ${{ secrets.HOST_1 }}
+          username: ${{ secrets.HOST_1_USERNAME }}
+          ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
+          registry: ${{ secrets.CI_REGISTRY }}
+          registry_repo: ${{ secrets.CI_REGISTRY_REPO }}
+          service_name: ${{ vars.SERVICE_NAME }}
+          service_tag: ${{ env.SERVICE_TAG }}
+          docker_compose_file: ${{ vars.DOCKER_COMPOSE_FILE }}
+          coin: ${{ vars.COIN }}
+          network: ${{ vars.NETWORK }}
+          container_name: ${{ vars.CONTAINER_NAME }}
+          service_compose_file: ${{ vars.SERVICE_COMPOSE_FILE }}
+          compose_updated_file: dogecoin.yml.updated
+          config_updated_file: dogecoin.conf.updated
+          post_deploy_sleep_seconds: "10"
+          reload_nginx: "false"
+
+      - name: Docker logout
+        if: always()
+        shell: bash
+        env:
+          CI_REGISTRY: ${{ secrets.CI_REGISTRY }}
+        run: |
+          set +e
+          docker logout "$CI_REGISTRY"
+          exit 0
