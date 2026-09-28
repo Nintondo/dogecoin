@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 # Download, extract, and clean up Dogecoin source
-RUN curl -o dogecoin.tar.gz -Lk "https://github.com/dogecoin/dogecoin/archive/refs/tags/v${VERSION_DOGE}.tar.gz" && \
+RUN curl --fail --location -o dogecoin.tar.gz "https://github.com/dogecoin/dogecoin/archive/refs/tags/v${VERSION_DOGE}.tar.gz" && \
     tar -xf dogecoin.tar.gz && \
     mv dogecoin-${VERSION_DOGE}/* ./ && \
     rm -rf dogecoin-${VERSION_DOGE} && \
@@ -31,10 +31,10 @@ RUN curl -o dogecoin.tar.gz -Lk "https://github.com/dogecoin/dogecoin/archive/re
 RUN if [ "${BUILD_JOBS}" = "0" ] || [ -z "${BUILD_JOBS}" ]; then BUILD_JOBS="$(nproc)"; fi && \
     ln -snf /usr/share/zoneinfo/Etc/UTC /etc/localtime && echo Etc/UTC > /etc/timezone && \
     ccache --max-size=100M && \
-    make -j"${BUILD_JOBS}" -C depends HOST=x86_64-unknown-linux-gnu && \
+    make -j"${BUILD_JOBS}" -C depends HOST=x86_64-unknown-linux-gnu NO_QT=1 && \
     ./autogen.sh && \
     CONFIG_SITE="$PWD/depends/x86_64-unknown-linux-gnu/share/config.site" \
-    ./configure --prefix="${PREFIX}" --enable-glibc-back-compat --enable-zmq \
+    ./configure --prefix="${PREFIX}" --without-gui --enable-glibc-back-compat --enable-zmq \
       --enable-reduce-exports --enable-c++14 LDFLAGS=-static-libstdc++ && \
     make -j"${BUILD_JOBS}" && \
     if [ "${RUN_TESTS}" = "1" ]; then make -j"${BUILD_JOBS}" check VERBOSE=1; fi && \
@@ -62,7 +62,10 @@ WORKDIR /app
 
 COPY --from=builder /build/opt/dogecoin/bin/ /app/
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY healthcheck.sh /healthcheck.sh
+RUN chmod +x /entrypoint.sh /healthcheck.sh
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 CMD ["/healthcheck.sh"]
 
 EXPOSE 19918
 
