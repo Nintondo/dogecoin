@@ -59,6 +59,10 @@ inputs:
     description: Maximum time to wait for a healthy container.
     required: false
     default: "600"
+  public_health_url:
+    description: Optional public readiness URL checked from the CI runner.
+    required: false
+    default: ""
   reload_nginx:
     description: Whether to reload nginx after deploy.
     required: false
@@ -183,3 +187,14 @@ runs:
           if [ "${RELOAD_NGINX}" = "true" ]; then docker exec nginx nginx -s reload; fi
           trap - ERR
           rm -f "${COMPOSE_BACKUP}" "${CONFIG_BACKUP}" "${ENV_BACKUP}"
+    - name: Check public readiness from CI runner
+      if: inputs.public_health_url != ''
+      shell: bash
+      env:
+        PUBLIC_HEALTH_URL: ${{ inputs.public_health_url }}
+      run: |
+        set -euo pipefail
+        curl --fail --silent --show-error --output /dev/null \
+          --connect-timeout 5 --max-time 10 \
+          --retry 5 --retry-delay 3 --retry-all-errors \
+          "$PUBLIC_HEALTH_URL"

@@ -139,6 +139,7 @@ jobs:
           compose_updated_file: dogecoin.yml.updated
           config_updated_file: dogecoin.conf.updated
           health_timeout_seconds: "600"
+          public_health_url: ${{ vars.PUBLIC_HEALTH_URL }}
           reload_nginx: "false"
 
       - name: Docker logout
