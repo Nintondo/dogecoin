@@ -27,6 +27,7 @@ on:
     paths:
       - 'Dockerfile'
       - 'entrypoint.sh'
+      - 'healthcheck.sh'
 
 concurrency:
   group: build-${{ github.ref }}

@@ -55,10 +55,10 @@ inputs:
     description: Optional env file to place as .env on the server.
     required: false
     default: ""
-  post_deploy_sleep_seconds:
-    description: Sleep time after restart.
+  health_timeout_seconds:
+    description: Maximum time to wait for a healthy container.
     required: false
-    default: "10"
+    default: "600"
   reload_nginx:
     description: Whether to reload nginx after deploy.
     required: false
@@ -82,15 +82,15 @@ runs:
         COMPOSE_UPDATED_FILE: ${{ inputs.compose_updated_file }}
         CONFIG_UPDATED_FILE: ${{ inputs.config_updated_file }}
         ENV_UPDATED_FILE: ${{ inputs.env_updated_file }}
-        POST_DEPLOY_SLEEP_SECONDS: ${{ inputs.post_deploy_sleep_seconds }}
+        HEALTH_TIMEOUT_SECONDS: ${{ inputs.health_timeout_seconds }}
         RELOAD_NGINX: ${{ inputs.reload_nginx }}
       with:
         host: ${{ inputs.host }}
         username: ${{ inputs.username }}
         key: ${{ inputs.ssh_private_key }}
-        envs: CI_REGISTRY,CI_REGISTRY_REPO,SERVICE_NAME,SERVICE_TAG,DOCKER_COMPOSE_FILE,COIN,NETWORK,CONTAINER_NAME_INPUT,IMAGE_NAME_OVERRIDE,SERVICE_COMPOSE_FILE,COMPOSE_UPDATED_FILE,CONFIG_UPDATED_FILE,ENV_UPDATED_FILE,POST_DEPLOY_SLEEP_SECONDS,RELOAD_NGINX
+        envs: CI_REGISTRY,CI_REGISTRY_REPO,SERVICE_NAME,SERVICE_TAG,DOCKER_COMPOSE_FILE,COIN,NETWORK,CONTAINER_NAME_INPUT,IMAGE_NAME_OVERRIDE,SERVICE_COMPOSE_FILE,COMPOSE_UPDATED_FILE,CONFIG_UPDATED_FILE,ENV_UPDATED_FILE,HEALTH_TIMEOUT_SECONDS,RELOAD_NGINX
         script: |
-          set -e
+          set -Eeuo pipefail
 
           for var in CI_REGISTRY CI_REGISTRY_REPO SERVICE_NAME SERVICE_TAG DOCKER_COMPOSE_FILE COIN NETWORK; do
             if [ -z "${!var}" ]; then
@@ -119,43 +119,67 @@ runs:
           fi
 
           cd "${SERVICE_PATH}"
+          TARGET_COMPOSE="${SERVICE_PATH}/${SERVICE_COMPOSE_FILE:-dogecoin.yml}"
+          test -f "${TARGET_COMPOSE}"
+          COMPOSE_BACKUP="$(mktemp "${SERVICE_PATH}/.compose-backup.XXXXXX")"
+          cp -p "${TARGET_COMPOSE}" "${COMPOSE_BACKUP}"
+          CONFIG_BACKUP=""
+          CONFIG_TARGET_FILE="data/dogecoin.conf"
+          if [ -n "${CONFIG_UPDATED_FILE}" ]; then
+            TARGET_CONFIG="${SERVICE_PATH}/${CONFIG_TARGET_FILE}"
+            test -f "${CONFIG_UPDATED_FILE}"
+            test -f "${TARGET_CONFIG}"
+            CONFIG_BACKUP="$(mktemp "${SERVICE_PATH}/.config-backup.XXXXXX")"
+            cp -p "${TARGET_CONFIG}" "${CONFIG_BACKUP}"
+          fi
+          ENV_BACKUP=""
+          if [ -n "${ENV_UPDATED_FILE}" ] && [ -f .env ]; then
+            ENV_BACKUP="$(mktemp "${SERVICE_PATH}/.env-backup.XXXXXX")"
+            cp -p .env "${ENV_BACKUP}"
+          fi
 
-          if [ -n "${COMPOSE_UPDATED_FILE}" ] && [ -f "${COMPOSE_UPDATED_FILE}" ]; then
-            TARGET_COMPOSE="${SERVICE_COMPOSE_FILE}"
-            if [ -z "${TARGET_COMPOSE}" ]; then
-              TARGET_COMPOSE="${SERVICE_NAME}.yml"
-            fi
-            if [ -f "${TARGET_COMPOSE}" ]; then
-              cp "${TARGET_COMPOSE}" "${TARGET_COMPOSE}.old"
-            fi
+          rollback() {
+            status=$?
+            trap - ERR
+            echo "Deploy failed; restoring the previous compose and config files."
+            cp -p "${COMPOSE_BACKUP}" "${TARGET_COMPOSE}"
+            if [ -n "${CONFIG_BACKUP}" ]; then cp -p "${CONFIG_BACKUP}" "${TARGET_CONFIG}"; fi
+            if [ -n "${ENV_BACKUP}" ]; then cp -p "${ENV_BACKUP}" .env; fi
+            cd "${BASE_PATH}"
+            docker compose -f "${DOCKER_COMPOSE_FILE}" up -d --no-deps --force-recreate "${CONTAINER}" || true
+            rm -f "${COMPOSE_BACKUP}" "${CONFIG_BACKUP}" "${ENV_BACKUP}"
+            exit "${status}"
+          }
+          trap rollback ERR
+
+          if [ -n "${COMPOSE_UPDATED_FILE}" ]; then
+            test -f "${COMPOSE_UPDATED_FILE}"
             mv "${COMPOSE_UPDATED_FILE}" "${TARGET_COMPOSE}"
-          elif [ -n "${SERVICE_COMPOSE_FILE}" ] && [ -f "${SERVICE_COMPOSE_FILE}" ]; then
-            sed -i "s|image: .*/${IMAGE_NAME}:.*|image: ${IMAGE}|" "${SERVICE_COMPOSE_FILE}"
+          else
+            sed -i "s|image: .*/${IMAGE_NAME}:.*|image: ${IMAGE}|" "${TARGET_COMPOSE}"
           fi
-
-          if [ -n "${CONFIG_UPDATED_FILE}" ] && [ -f "${CONFIG_UPDATED_FILE}" ]; then
-            mkdir -p data
-            if [ -f data/dogecoin.conf ]; then
-              cp data/dogecoin.conf data/dogecoin.conf.old
-            fi
-            mv "${CONFIG_UPDATED_FILE}" data/dogecoin.conf
-          fi
-
-          if [ -n "${ENV_UPDATED_FILE}" ] && [ -f "${ENV_UPDATED_FILE}" ]; then
-            if [ -f .env ]; then
-              mv .env .env.old
-            fi
-            mv "${ENV_UPDATED_FILE}" .env
-          fi
+          if [ -n "${CONFIG_BACKUP}" ]; then mv "${CONFIG_UPDATED_FILE}" "${TARGET_CONFIG}"; fi
+          if [ -n "${ENV_UPDATED_FILE}" ]; then mv "${ENV_UPDATED_FILE}" .env; fi
+          grep -Fq "image: ${IMAGE}" "${TARGET_COMPOSE}"
 
           cd "${BASE_PATH}"
+          docker compose -f "${DOCKER_COMPOSE_FILE}" config --quiet
+          docker compose -f "${DOCKER_COMPOSE_FILE}" pull "${CONTAINER}"
+          docker compose -f "${DOCKER_COMPOSE_FILE}" up -d --no-deps --force-recreate "${CONTAINER}"
 
-          docker compose -f "${DOCKER_COMPOSE_FILE}" up -d --force-recreate "${CONTAINER}"
+          deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
+          while [ "${SECONDS}" -lt "${deadline}" ]; do
+            state="$(docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "${CONTAINER}")"
+            case "${state}" in
+              'running healthy') break ;;
+              'running unhealthy'|*' missing'|exited*|dead*)
+                echo "Container ${CONTAINER} failed readiness: ${state}"
+                false ;;
+            esac
+            sleep 3
+          done
+          [ "${state}" = 'running healthy' ] || { echo "Healthcheck timed out: ${state}"; false; }
 
-          if [ -n "${POST_DEPLOY_SLEEP_SECONDS}" ]; then
-            sleep "${POST_DEPLOY_SLEEP_SECONDS}"
-          fi
-
-          if [ "${RELOAD_NGINX}" = "true" ]; then
-            docker exec nginx nginx -s reload || true
-          fi
+          if [ "${RELOAD_NGINX}" = "true" ]; then docker exec nginx nginx -s reload; fi
+          trap - ERR
+          rm -f "${COMPOSE_BACKUP}" "${CONFIG_BACKUP}" "${ENV_BACKUP}"

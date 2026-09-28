@@ -138,7 +138,7 @@ jobs:
           service_compose_file: ${{ vars.SERVICE_COMPOSE_FILE }}
           compose_updated_file: dogecoin.yml.updated
           config_updated_file: dogecoin.conf.updated
-          post_deploy_sleep_seconds: "10"
+          health_timeout_seconds: "600"
           reload_nginx: "false"
 
       - name: Docker logout
