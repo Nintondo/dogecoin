@@ -52,7 +52,10 @@ jobs:
           fi
 
       - name: Checkout repository for local actions
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
 
       - name: Resolve SERVICE_TAG
         uses: ./.github/actions/resolve-service-tag
@@ -113,7 +116,7 @@ jobs:
           envsubst < .github/templates/dogecoin.conf.template > dogecoin.conf.updated
 
       - name: Copy rendered files to server
-        uses: appleboy/scp-action@v1.0.0
+        uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1.0.0
         with:
           host: ${{ secrets.HOST_1 }}
           username: ${{ secrets.HOST_1_USERNAME }}
@@ -138,7 +141,8 @@ jobs:
           service_compose_file: ${{ vars.SERVICE_COMPOSE_FILE }}
           compose_updated_file: dogecoin.yml.updated
           config_updated_file: dogecoin.conf.updated
-          post_deploy_sleep_seconds: "10"
+          health_timeout_seconds: "600"
+          public_health_url: ${{ vars.PUBLIC_HEALTH_URL }}
           reload_nginx: "false"
 
       - name: Docker logout
