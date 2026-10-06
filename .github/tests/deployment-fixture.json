@@ -1,0 +1,39 @@
+[
+  {
+    "env": {
+      "CI_REGISTRY": "registry.example",
+      "CI_REGISTRY_REPO": "project",
+      "SERVICE_NAME": "dogecoin",
+      "SERVICE_TAG": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "DOCKER_COMPOSE_FILE": "custom-root.yml",
+      "COIN": "doge",
+      "NETWORK": "mainnet",
+      "CONTAINER_NAME_INPUT": "dogecoin-mainnet",
+      "IMAGE_NAME_OVERRIDE": "dogecoin",
+      "SERVICE_COMPOSE_FILE": "dogecoin.yml",
+      "COMPOSE_UPDATED_FILE": "dogecoin.yml.updated",
+      "CONFIG_UPDATED_FILE": "data/dogecoin.conf.updated",
+      "ENV_UPDATED_FILE": ".env.updated",
+      "HEALTH_TIMEOUT_SECONDS": "600",
+      "RELOAD_NGINX": "false",
+      "DEPLOYMENT_ID": "${{ steps.transaction.outputs.id }}",
+      "DEPLOY_PHASE": "deploy",
+      "SERVICE_ENVIRONMENT": "testnet",
+      "CONFIG_TARGET_FILE": "data/dogecoin.conf"
+    },
+    "base_path": "/opt/doge-mainnet",
+    "service_path": "/opt/doge-mainnet/services/dogecoin",
+    "root_compose": "/opt/doge-mainnet/custom-root.yml",
+    "compose_service": "dogecoin-mainnet",
+    "compose_file": "dogecoin.yml",
+    "files": [
+      ".env",
+      "data/dogecoin.conf"
+    ],
+    "staged_files": [
+      ".env.updated",
+      "dogecoin.yml.updated",
+      "data/dogecoin.conf.updated"
+    ]
+  }
+]
