@@ -21,3 +21,9 @@ services:
       - "19918"
     command: ["/app/dogecoind", "-datadir=/app/data/node", "-conf=/app/data/dogecoin.conf", "-printtoconsole"${DOGECOIN_NETWORK_ARG}]
     stop_grace_period: 10m
+    healthcheck:
+      test: ["CMD", "timeout", "8", "/app/dogecoin-cli", "-datadir=/app/data/node", "-conf=/app/data/dogecoin.conf"${DOGECOIN_NETWORK_ARG}, "getnetworkinfo"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
