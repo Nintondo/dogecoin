@@ -17,6 +17,16 @@ IMAGE_NAME="${IMAGE_NAME_OVERRIDE:-$SERVICE_NAME}"
 IMAGE="${CI_REGISTRY}/${CI_REGISTRY_REPO}/${IMAGE_NAME}:${SERVICE_TAG}"
 CONTAINER="${CONTAINER_NAME_INPUT:-${COIN}-${NETWORK}-${SERVICE_NAME}}"
 COMPOSE_SERVICE="${COMPOSE_SERVICE_NAME_OVERRIDE:-${COMPOSE_SERVICE:-$CONTAINER}}"
+# Explicit deployment paths let SCP and Compose use the same canonical layout.
+if [ -n "${BASE_PATH_INPUT:-}" ]; then BASE_PATH="$BASE_PATH_INPUT"; fi
+if [ -n "${SERVICE_PATH_INPUT:-}" ]; then SERVICE_PATH="$SERVICE_PATH_INPUT"; fi
+for deployment_path in "$BASE_PATH" "$SERVICE_PATH"; do
+  [[ "$deployment_path" == /opt/* && "$deployment_path" != *..* ]] || { echo 'Deployment paths must stay inside /opt'; exit 1; }
+done
+if [ -n "${COMPOSE_PROJECT_NAME_INPUT:-}" ]; then
+  [[ "$COMPOSE_PROJECT_NAME_INPUT" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo 'Invalid Compose project name'; exit 1; }
+  export COMPOSE_PROJECT_NAME="$COMPOSE_PROJECT_NAME_INPUT"
+fi
 TARGET_COMPOSE="$SERVICE_PATH/${DOCKER_COMPOSE_FILE}"
 TARGET_COMPOSE="$SERVICE_PATH/${SERVICE_COMPOSE_FILE:-dogecoin.yml}"
 TARGET_CONFIG="$SERVICE_PATH/data/dogecoin.conf"
@@ -35,7 +45,11 @@ if [ -n "$ENV_UPDATED_FILE" ]; then backup_file "$SERVICE_PATH/.env" || return 1
 
 apply_files() {
 if [ -n "$COMPOSE_UPDATED_FILE" ]; then mv "$SERVICE_PATH/$COMPOSE_UPDATED_FILE" "$TARGET_COMPOSE"; fi
-if [ -n "$CONFIG_UPDATED_FILE" ]; then mv "$SERVICE_PATH/$CONFIG_UPDATED_FILE" "$TARGET_CONFIG"; fi
+if [ -n "$CONFIG_UPDATED_FILE" ]; then
+  mv "$SERVICE_PATH/$CONFIG_UPDATED_FILE" "$TARGET_CONFIG"
+  if [ "$(id -u)" = 0 ]; then chown 0:1001 "$TARGET_CONFIG"; fi
+  chmod 640 "$TARGET_CONFIG"
+fi
 sed -i "s|image: .*/${IMAGE_NAME}:.*|image: ${IMAGE}|" "$TARGET_COMPOSE"
 if [ -n "$ENV_UPDATED_FILE" ]; then mv "$SERVICE_PATH/$ENV_UPDATED_FILE" "$SERVICE_PATH/.env"; fi
 }
